@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getDatabase, ref, onValue, set, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
+import { getDatabase, ref, onValue, set } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
@@ -66,6 +66,7 @@ function createVideoPlayer(type, id) {
     if (type === 'youtube') {
         const iframe = document.createElement('iframe');
         iframe.src = `https://www.youtube.com/embed/${id}?enablejsapi=1&controls=1&modestbranding=1`;
+        iframe.id = 'yt-player';
         iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
         iframe.allowFullscreen = true;
         elements.videoPlayer.appendChild(iframe);
@@ -120,8 +121,24 @@ function syncVideo() {
             isPlaying = data.isPlaying;
             if (isPlaying) {
                 elements.playPauseBtn.textContent = '⏸ Pause';
+                if (videoPlayer && videoPlayer.id === 'yt-player') {
+                    videoPlayer.contentWindow.postMessage(
+                      JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+                      '*'
+                    );
+                } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+                    videoPlayer.play();
+                }
             } else {
                 elements.playPauseBtn.textContent = '▶️ Play';
+                if (videoPlayer && videoPlayer.id === 'yt-player') {
+                    videoPlayer.contentWindow.postMessage(
+                      JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+                      '*'
+                    );
+                } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+                    videoPlayer.pause();
+                }
             }
         }
         
