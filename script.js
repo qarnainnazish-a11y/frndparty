@@ -176,10 +176,20 @@ function applyPlayPauseState() {
 
 function applySeekState() {
     elements.currentTime.textContent = formatTime(currentTime);
+
     if (ytPlayer && ytReady) {
-        ytPlayer.seekTo(currentTime, true);
+        const now = ytPlayer.getCurrentTime() || 0;
+        const diff = Math.abs(now - currentTime);
+        // sirf tab seek karo jab 1 second se zyada difference ho
+        if (diff > 1.0) {
+            ytPlayer.seekTo(currentTime, true);
+        }
     } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
-        videoPlayer.currentTime = currentTime;
+        const now = videoPlayer.currentTime || 0;
+        const diff = Math.abs(now - currentTime);
+        if (diff > 0.5) {
+            videoPlayer.currentTime = currentTime;
+        }
     }
 }
 
@@ -214,10 +224,10 @@ function syncVideo() {
 
 /* ---------- Host: continuously push time ---------- */
 function startHostTimeSync() {
-    // sirf host hi Firebase me time likhega
     setInterval(() => {
         if (!currentRoomId) return;
         if (!isHost) return;
+
         let t = 0;
         if (ytPlayer && ytReady) {
             t = ytPlayer.getCurrentTime() || 0;
@@ -226,6 +236,7 @@ function startHostTimeSync() {
         } else {
             return;
         }
+
         currentTime = t;
         elements.currentTime.textContent = formatTime(currentTime);
         updateRoomState({ currentTime });
