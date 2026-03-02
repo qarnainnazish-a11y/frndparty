@@ -6,12 +6,13 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 let currentRoomId = null;
-let videoPlayer = null;      // HTMLVideoElement ya YT player wrapper
-let ytPlayer = null;         // YT.Player instance
+let ytPlayer = null;       // YouTube player instance
+let videoPlayer = null;    // HTML5 <video> element (for direct links)
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
 let ytReady = false;
+let isHost = false;        // jo loadVideo / createRoom karega, wahi host
 
 const elements = {
     roomId: document.getElementById('roomId'),
@@ -38,8 +39,8 @@ function showError(msg) {
 }
 
 function formatTime(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
+    const mins = Math.floor(seconds / 60) || 0;
+    const secs = Math.floor(seconds % 60) || 0;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
@@ -62,7 +63,7 @@ function parseVideoUrl(url) {
     return null;
 }
 
-// ----- YouTube API load -----
+/* ---------- YouTube API load ---------- */
 function loadYouTubeApiIfNeeded() {
     if (window.YT && window.YT.Player) return;
     const tag = document.createElement('script');
@@ -72,10 +73,10 @@ function loadYouTubeApiIfNeeded() {
 }
 
 window.onYouTubeIframeAPIReady = function () {
-    // called automatically when API loaded
+    // API ready callback
 };
 
-function createYouTubePlayer(videoId) {
+function createYouTubePlayer(videoId, startTime = 0) {
     loadYouTubeApiIfNeeded();
     elements.videoPlayer.innerHTML = '<div id="yt-player"></div>';
     ytReady = false;
@@ -89,27 +90,33 @@ function createYouTubePlayer(videoId) {
         events: {
             onReady: (event) => {
                 ytReady = true;
-                // duration set
                 const dur = event.target.getDuration();
                 if (!isNaN(dur) && dur > 0) {
                     elements.duration.textContent = formatTime(dur);
                 }
+                if (startTime > 0) {
+                    event.target.seekTo(startTime, true);
+                }
                 if (isPlaying) {
                     event.target.playVideo();
+                } else {
+                    event.target.pauseVideo();
                 }
             }
         }
     });
-    videoPlayer = null; // we use ytPlayer instead
+    videoPlayer = null;
 }
 
-function createVideoPlayer(type, id) {
+/* ---------- Player creation ---------- */
+function createVideoPlayer(type, id, startAt = 0) {
     elements.videoPlayer.innerHTML = '';
     ytPlayer = null;
     ytReady = false;
+    videoPlayer = null;
 
     if (type === 'youtube') {
-        createYouTubePlayer(id);
+        createYouTubePlayer(id, startAt);
     } else if (type === 'drive') {
         const iframe = document.createElement('iframe');
         iframe.src = `https://drive.google.com/file/d/${id}/preview`;
@@ -125,13 +132,17 @@ function createVideoPlayer(type, id) {
         elements.videoPlayer.appendChild(video);
         videoPlayer = video;
         videoPlayer.addEventListener('loadedmetadata', () => {
-            updateRoomState({ duration: videoPlayer.duration });
+            const dur = videoPlayer.duration;
+            if (!isNaN(dur)) {
+                elements.duration.textContent = formatTime(dur);
+            }
         });
     }
 
     videoId = { type, id };
 }
 
+/* ---------- Firebase state ---------- */
 function updateRoomState(partialState) {
     if (!currentRoomId) return;
     const roomRef = ref(db, `rooms/${currentRoomId}`);
@@ -144,6 +155,7 @@ function updateRoomState(partialState) {
     });
 }
 
+/* ---------- Apply state to local player ---------- */
 function applyPlayPauseState() {
     if (isPlaying) {
         elements.playPauseBtn.textContent = '⏸ Pause';
@@ -171,6 +183,7 @@ function applySeekState() {
     }
 }
 
+/* ---------- Sync from Firebase ---------- */
 function syncVideo() {
     if (!currentRoomId) return;
 
@@ -180,7 +193,7 @@ function syncVideo() {
         if (!data) return;
 
         if (data.videoId && (data.videoId.type !== videoId?.type || data.videoId.id !== videoId?.id)) {
-            createVideoPlayer(data.videoId.type, data.videoId.id);
+            createVideoPlayer(data.videoId.type, data.videoId.id, data.currentTime || 0);
         }
 
         if (typeof data.isPlaying === 'boolean') {
@@ -199,14 +212,36 @@ function syncVideo() {
     });
 }
 
-// ----- UI events -----
+/* ---------- Host: continuously push time ---------- */
+function startHostTimeSync() {
+    // sirf host hi Firebase me time likhega
+    setInterval(() => {
+        if (!currentRoomId) return;
+        if (!isHost) return;
+        let t = 0;
+        if (ytPlayer && ytReady) {
+            t = ytPlayer.getCurrentTime() || 0;
+        } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+            t = videoPlayer.currentTime || 0;
+        } else {
+            return;
+        }
+        currentTime = t;
+        elements.currentTime.textContent = formatTime(currentTime);
+        updateRoomState({ currentTime });
+    }, 1000); // har 1 second me
+}
+
+/* ---------- UI events ---------- */
 elements.createRoom.addEventListener('click', () => {
     const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
     currentRoomId = roomId;
+    isHost = true;
     elements.roomId.value = roomId;
     elements.roomStatus.textContent = `Room: ${roomId}`;
     elements.roomControls.classList.remove('hidden');
     syncVideo();
+    startHostTimeSync();
 });
 
 elements.joinRoom.addEventListener('click', () => {
@@ -216,9 +251,11 @@ elements.joinRoom.addEventListener('click', () => {
         return;
     }
     currentRoomId = roomId;
+    isHost = false; // join karne wala viewer hai
     elements.roomStatus.textContent = `Room: ${roomId}`;
     elements.roomControls.classList.remove('hidden');
     syncVideo();
+    startHostTimeSync();
 });
 
 elements.loadVideo.addEventListener('click', () => {
@@ -234,7 +271,7 @@ elements.loadVideo.addEventListener('click', () => {
         return;
     }
 
-    createVideoPlayer(parsed.type, parsed.id);
+    createVideoPlayer(parsed.type, parsed.id, 0);
     isPlaying = false;
     currentTime = 0;
     elements.currentTime.textContent = '0:00';
