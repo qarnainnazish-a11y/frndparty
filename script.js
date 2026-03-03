@@ -6,8 +6,8 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 let currentRoomId = null;
-let ytPlayer = null;
-let videoPlayer = null;
+let ytPlayer = null;       // YouTube player
+let videoPlayer = null;    // <video> or Drive iframe
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
@@ -46,20 +46,20 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// --------- URL parsing (YouTube, Drive share, direct) ----------
+/* ---------- URL parsing ---------- */
 function parseVideoUrl(url) {
   // YouTube
   const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
   const ytMatch = url.match(ytRegex);
   if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
-  // Google Drive share link -> direct download stream URL
+  // Google Drive share link -> use preview iframe
+  // Example: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
   const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
   const driveMatch = url.match(driveRegex);
   if (driveMatch) {
     const fileId = driveMatch[1];
-    const directDriveUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-    return { type: 'direct', id: directDriveUrl };
+    return { type: 'drive', id: fileId };
   }
 
   // Google temporary download link
@@ -76,7 +76,7 @@ function parseVideoUrl(url) {
   return null;
 }
 
-// --------- YouTube API load ----------
+/* ---------- YouTube API ---------- */
 function loadYouTubeApiIfNeeded() {
   if (window.YT && window.YT.Player) return;
   const tag = document.createElement('script');
@@ -119,7 +119,7 @@ function createYouTubePlayer(videoId, startTime = 0) {
   videoPlayer = null;
 }
 
-// --------- Player creation (YouTube + direct only) ----------
+/* ---------- Player creation ---------- */
 function createVideoPlayer(type, id, startAt = 0) {
   elements.videoPlayer.innerHTML = '';
   ytPlayer = null;
@@ -129,6 +129,20 @@ function createVideoPlayer(type, id, startAt = 0) {
   if (type === 'youtube') {
     createYouTubePlayer(id, startAt);
     elements.statusText.textContent = 'Loaded YouTube video';
+  } else if (type === 'drive') {
+    // Google Drive preview iframe: /preview trick
+    // e.g. https://drive.google.com/file/d/FILE_ID/preview
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://drive.google.com/file/d/${id}/preview`;
+    iframe.allow = 'autoplay';
+    iframe.allowFullscreen = true;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = '0';
+    elements.videoPlayer.appendChild(iframe);
+    videoPlayer = iframe;
+    elements.statusText.textContent = 'Loaded Google Drive video (preview)';
+    // Duration <-> controls directly control नहीं कर सकते, ye Drive की restriction है.[web:106][web:109]
   } else if (type === 'direct') {
     const video = document.createElement('video');
     video.src = id;
@@ -152,7 +166,7 @@ function createVideoPlayer(type, id, startAt = 0) {
   videoId = { type, id };
 }
 
-// --------- Firebase state ----------
+/* ---------- Firebase state ---------- */
 function updateRoomState(partialState) {
   if (!currentRoomId) return;
   const roomRef = ref(db, `rooms/${currentRoomId}`);
@@ -168,7 +182,7 @@ function updateRoomState(partialState) {
   }
 }
 
-// --------- Apply state locally ----------
+/* ---------- Apply local state ---------- */
 function applyPlayPauseState() {
   if (isPlaying) {
     elements.playPauseBtn.textContent = '⏸ Pause';
@@ -177,6 +191,7 @@ function applyPlayPauseState() {
     } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
       videoPlayer.play();
     }
+    // Drive iframe ko JS se play nahi kara sakte; user ko iframe ke Play pe click karna hoga.[web:106][web:111]
   } else {
     elements.playPauseBtn.textContent = '▶️ Play';
     if (ytPlayer && ytReady) {
@@ -203,9 +218,10 @@ function applySeekState() {
       videoPlayer.currentTime = currentTime;
     }
   }
+  // Drive iframe me seek control nahi milega, ye limitation rahegi.[web:106][web:111]
 }
 
-// --------- Sync from Firebase ----------
+/* ---------- Sync from Firebase ---------- */
 function syncVideo() {
   if (!currentRoomId) return;
 
@@ -234,7 +250,7 @@ function syncVideo() {
   });
 }
 
-// --------- Host time sync ----------
+/* ---------- Host time sync ---------- */
 function startHostTimeSync() {
   setInterval(() => {
     if (!currentRoomId) return;
@@ -246,6 +262,7 @@ function startHostTimeSync() {
     } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
       t = videoPlayer.currentTime || 0;
     } else {
+      // Drive iframe ka currentTime nahi le sakte; bas approx time hi sync hoga.
       return;
     }
 
@@ -255,7 +272,7 @@ function startHostTimeSync() {
   }, 1000);
 }
 
-// --------- UI events ----------
+/* ---------- UI events ---------- */
 elements.createRoom.addEventListener('click', () => {
   const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
   currentRoomId = roomId;
@@ -300,6 +317,7 @@ elements.loadVideo.addEventListener('click', () => {
   isPlaying = false;
   currentTime = 0;
   elements.currentTime.textContent = '0:00';
+  elements.duration.textContent = '0:00';
   elements.statusText.textContent = 'Video loaded. Press Play to start.';
   updateRoomState({ videoId: parsed, currentTime, isPlaying });
 });
