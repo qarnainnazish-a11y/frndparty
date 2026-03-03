@@ -62,7 +62,6 @@ function parseVideoUrl(url) {
 
   // Google temporary download link (video-downloads.googleusercontent.com)
   if (url.includes('video-downloads.googleusercontent.com')) {
-    // Isko hum direct video maan rahe hain
     return { type: 'direct', id: url };
   }
 
@@ -85,7 +84,7 @@ function loadYouTubeApiIfNeeded() {
 }
 
 window.onYouTubeIframeAPIReady = function () {
-  // API ready callback (player creation loadVideo ke time hota hai)
+  // API ready callback
 };
 
 function createYouTubePlayer(videoId, startTime = 0) {
@@ -174,7 +173,9 @@ function updateRoomState(partialState) {
     timestamp: Date.now(),
     ...partialState
   });
-  elements.syncStatus.textContent = 'Synced just now';
+  if (elements.syncStatus) {
+    elements.syncStatus.textContent = 'Synced just now';
+  }
 }
 
 /* ---------- Apply state to local player ---------- */
