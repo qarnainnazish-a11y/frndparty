@@ -45,10 +45,12 @@ function formatTime(seconds) {
 }
 
 function parseVideoUrl(url) {
+    // YouTube
     const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
     const ytMatch = url.match(ytRegex);
     if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
+    // Google Drive
     const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
     const driveMatch = url.match(driveRegex);
     if (driveMatch) {
@@ -56,7 +58,9 @@ function parseVideoUrl(url) {
         return { type: 'drive', id: fileId };
     }
 
-    if (url.match(/\.(mp4|webm|ogg)$/i)) {
+    // Koi bhi download link jisme .mp4 / .webm / .ogg kahin bhi ho
+    const directRegex = /\.(mp4|webm|ogg)(\?|#|$)/i;
+    if (directRegex.test(url)) {
         return { type: 'direct', id: url };
     }
 
@@ -180,7 +184,6 @@ function applySeekState() {
     if (ytPlayer && ytReady) {
         const now = ytPlayer.getCurrentTime() || 0;
         const diff = Math.abs(now - currentTime);
-        // sirf tab seek karo jab 1 second se zyada difference ho
         if (diff > 1.0) {
             ytPlayer.seekTo(currentTime, true);
         }
@@ -240,7 +243,7 @@ function startHostTimeSync() {
         currentTime = t;
         elements.currentTime.textContent = formatTime(currentTime);
         updateRoomState({ currentTime });
-    }, 1000); // har 1 second me
+    }, 1000);
 }
 
 /* ---------- UI events ---------- */
@@ -262,7 +265,7 @@ elements.joinRoom.addEventListener('click', () => {
         return;
     }
     currentRoomId = roomId;
-    isHost = false; // join karne wala viewer hai
+    isHost = false;
     elements.roomStatus.textContent = `Room: ${roomId}`;
     elements.roomControls.classList.remove('hidden');
     syncVideo();
