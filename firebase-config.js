@@ -1,6 +1,7 @@
 export const firebaseConfig = {
   apiKey: "AIzaSyAc9WLJso4c4K-igEpk51nTzTWACfMZTkQ",
   authDomain: "frndparty-ab2e9.firebaseapp.com",
+  databaseURL: "https://frndparty-ab2e9-default-rtdb.firebaseio.com",
   projectId: "frndparty-ab2e9",
   storageBucket: "frndparty-ab2e9.firebasestorage.app",
   messagingSenderId: "451894219901",
