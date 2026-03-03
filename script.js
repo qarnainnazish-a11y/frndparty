@@ -46,20 +46,33 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-/* ---------- URL parsing ---------- */
+/* ---------- URL parsing (YouTube / Drive / Dropbox / direct) ---------- */
 function parseVideoUrl(url) {
   // YouTube
   const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
   const ytMatch = url.match(ytRegex);
   if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
-  // Google Drive share link -> use preview iframe
+  // Google Drive share link -> preview iframe
   // Example: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
   const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
   const driveMatch = url.match(driveRegex);
   if (driveMatch) {
     const fileId = driveMatch[1];
     return { type: 'drive', id: fileId };
+  }
+
+  // Dropbox share link -> convert to direct-host URL
+  // Example: https://www.dropbox.com/scl/fi/.../file.mp4?...&dl=0
+  if (url.includes('dropbox.com')) {
+    try {
+      const u = new URL(url);
+      u.hostname = 'dl.dropboxusercontent.com'; // direct file host
+      u.searchParams.delete('dl');             // dl param remove
+      return { type: 'direct', id: u.toString() };
+    } catch (e) {
+      // ignore parse error, fallback below
+    }
   }
 
   // Google temporary download link
@@ -130,8 +143,7 @@ function createVideoPlayer(type, id, startAt = 0) {
     createYouTubePlayer(id, startAt);
     elements.statusText.textContent = 'Loaded YouTube video';
   } else if (type === 'drive') {
-    // Google Drive preview iframe: /preview trick
-    // e.g. https://drive.google.com/file/d/FILE_ID/preview
+    // Google Drive preview iframe
     const iframe = document.createElement('iframe');
     iframe.src = `https://drive.google.com/file/d/${id}/preview`;
     iframe.allow = 'autoplay';
@@ -142,8 +154,9 @@ function createVideoPlayer(type, id, startAt = 0) {
     elements.videoPlayer.appendChild(iframe);
     videoPlayer = iframe;
     elements.statusText.textContent = 'Loaded Google Drive video (preview)';
-    // Duration <-> controls directly control नहीं कर सकते, ye Drive की restriction है.[web:106][web:109]
+    // Drive preview me duration/control JS se nahi milta, ye limitation hai.[web:106][web:111]
   } else if (type === 'direct') {
+    // Direct video (Dropbox converted link, raw mp4, etc.)
     const video = document.createElement('video');
     video.src = id;
     video.controls = true;
@@ -191,7 +204,7 @@ function applyPlayPauseState() {
     } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
       videoPlayer.play();
     }
-    // Drive iframe ko JS se play nahi kara sakte; user ko iframe ke Play pe click karna hoga.[web:106][web:111]
+    // Drive iframe ko JS se play nahi kara sakte; user iframe ke Play pe click karega.[web:106][web:111]
   } else {
     elements.playPauseBtn.textContent = '▶️ Play';
     if (ytPlayer && ytReady) {
@@ -218,7 +231,7 @@ function applySeekState() {
       videoPlayer.currentTime = currentTime;
     }
   }
-  // Drive iframe me seek control nahi milega, ye limitation rahegi.[web:106][web:111]
+  // Drive iframe me seek handle nahi kar sakte.[web:106][web:111]
 }
 
 /* ---------- Sync from Firebase ---------- */
@@ -262,7 +275,6 @@ function startHostTimeSync() {
     } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
       t = videoPlayer.currentTime || 0;
     } else {
-      // Drive iframe ka currentTime nahi le sakte; bas approx time hi sync hoga.
       return;
     }
 
@@ -309,7 +321,7 @@ elements.loadVideo.addEventListener('click', () => {
 
   const parsed = parseVideoUrl(url);
   if (!parsed) {
-    showError('Unsupported URL. Use YouTube, Google Drive, or direct MP4/WebM');
+    showError('Unsupported URL. Use YouTube, Google Drive, Dropbox, or direct MP4/WebM');
     return;
   }
 
