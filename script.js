@@ -7,12 +7,12 @@ const db = getDatabase(app);
 
 let currentRoomId = null;
 let ytPlayer = null;       // YouTube player instance
-let videoPlayer = null;    // HTML5 <video> element (for direct links)
+let videoPlayer = null;    // HTML5 <video> element ya Drive iframe
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
 let ytReady = false;
-let isHost = false;        // jo loadVideo / createRoom karega, wahi host
+let isHost = false;        // jo loadVideo/createRoom karega, wahi host
 
 const elements = {
     roomId: document.getElementById('roomId'),
@@ -29,7 +29,9 @@ const elements = {
     duration: document.getElementById('duration'),
     roomStatus: document.getElementById('roomStatus'),
     viewerCount: document.getElementById('viewerCount'),
-    errorMsg: document.getElementById('errorMsg')
+    errorMsg: document.getElementById('errorMsg'),
+    statusText: document.getElementById('statusText'),
+    syncStatus: document.getElementById('syncStatus')
 };
 
 function showError(msg) {
@@ -50,7 +52,7 @@ function parseVideoUrl(url) {
     const ytMatch = url.match(ytRegex);
     if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
-    // Google Drive
+    // Google Drive normal share link
     const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
     const driveMatch = url.match(driveRegex);
     if (driveMatch) {
@@ -58,7 +60,13 @@ function parseVideoUrl(url) {
         return { type: 'drive', id: fileId };
     }
 
-    // Koi bhi download link jisme .mp4 / .webm / .ogg kahin bhi ho
+    // Google temporary download link (video-downloads.googleusercontent.com)
+    if (url.includes('video-downloads.googleusercontent.com')) {
+        // Isko hum direct video मान रहे hain
+        return { type: 'direct', id: url };
+    }
+
+    // Koi bhi URL jisme extension dikhe (.mp4 / .webm / .ogg)
     const directRegex = /\.(mp4|webm|ogg)(\?|#|$)/i;
     if (directRegex.test(url)) {
         return { type: 'direct', id: url };
@@ -77,7 +85,7 @@ function loadYouTubeApiIfNeeded() {
 }
 
 window.onYouTubeIframeAPIReady = function () {
-    // API ready callback
+    // API ready callback (player creation loadVideo ke time hota hai)
 };
 
 function createYouTubePlayer(videoId, startTime = 0) {
@@ -121,20 +129,29 @@ function createVideoPlayer(type, id, startAt = 0) {
 
     if (type === 'youtube') {
         createYouTubePlayer(id, startAt);
+        elements.statusText.textContent = 'Loaded YouTube video';
     } else if (type === 'drive') {
         const iframe = document.createElement('iframe');
         iframe.src = `https://drive.google.com/file/d/${id}/preview`;
         iframe.allow = 'autoplay';
         iframe.allowFullscreen = true;
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
         elements.videoPlayer.appendChild(iframe);
         videoPlayer = iframe;
+        elements.statusText.textContent = 'Loaded Google Drive video (preview)';
     } else if (type === 'direct') {
         const video = document.createElement('video');
         video.src = id;
         video.controls = true;
         video.autoplay = false;
+        video.playsInline = true;
+        video.style.width = '100%';
+        video.style.height = '100%';
         elements.videoPlayer.appendChild(video);
         videoPlayer = video;
+        elements.statusText.textContent = 'Loaded direct video link';
+
         videoPlayer.addEventListener('loadedmetadata', () => {
             const dur = videoPlayer.duration;
             if (!isNaN(dur)) {
@@ -157,6 +174,7 @@ function updateRoomState(partialState) {
         timestamp: Date.now(),
         ...partialState
     });
+    elements.syncStatus.textContent = 'Synced just now';
 }
 
 /* ---------- Apply state to local player ---------- */
@@ -254,6 +272,7 @@ elements.createRoom.addEventListener('click', () => {
     elements.roomId.value = roomId;
     elements.roomStatus.textContent = `Room: ${roomId}`;
     elements.roomControls.classList.remove('hidden');
+    elements.statusText.textContent = 'Room created. Load a video to start.';
     syncVideo();
     startHostTimeSync();
 });
@@ -268,6 +287,7 @@ elements.joinRoom.addEventListener('click', () => {
     isHost = false;
     elements.roomStatus.textContent = `Room: ${roomId}`;
     elements.roomControls.classList.remove('hidden');
+    elements.statusText.textContent = 'Joined room. Waiting for host to load a video.';
     syncVideo();
     startHostTimeSync();
 });
@@ -289,6 +309,7 @@ elements.loadVideo.addEventListener('click', () => {
     isPlaying = false;
     currentTime = 0;
     elements.currentTime.textContent = '0:00';
+    elements.statusText.textContent = 'Video loaded. Press Play to start.';
     updateRoomState({ videoId: parsed, currentTime, isPlaying });
 });
 
