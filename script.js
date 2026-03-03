@@ -6,13 +6,13 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 let currentRoomId = null;
-let ytPlayer = null;       // YouTube player instance
-let videoPlayer = null;    // HTML5 <video> element ya Drive iframe
+let ytPlayer = null;
+let videoPlayer = null;
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
 let ytReady = false;
-let isHost = false;        // jo loadVideo/createRoom karega, wahi host
+let isHost = false;
 
 const elements = {
   roomId: document.getElementById('roomId'),
@@ -47,25 +47,22 @@ function formatTime(seconds) {
 }
 
 function parseVideoUrl(url) {
-  // YouTube
   const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
   const ytMatch = url.match(ytRegex);
   if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
-  // Google Drive normal share link
   const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
   const driveMatch = url.match(driveRegex);
   if (driveMatch) {
     const fileId = driveMatch[1];
-    return { type: 'drive', id: fileId };
+    const directDriveUrl = `https://drive.google.com/uc?export=view&id=${fileId}`;
+    return { type: 'direct', id: directDriveUrl };
   }
 
-  // Google temporary download link (video-downloads.googleusercontent.com)
   if (url.includes('video-downloads.googleusercontent.com')) {
     return { type: 'direct', id: url };
   }
 
-  // Koi bhi URL jisme extension dikhe (.mp4 / .webm / .ogg)
   const directRegex = /\.(mp4|webm|ogg)(\?|#|$)/i;
   if (directRegex.test(url)) {
     return { type: 'direct', id: url };
@@ -74,7 +71,6 @@ function parseVideoUrl(url) {
   return null;
 }
 
-/* ---------- YouTube API load ---------- */
 function loadYouTubeApiIfNeeded() {
   if (window.YT && window.YT.Player) return;
   const tag = document.createElement('script');
@@ -83,9 +79,7 @@ function loadYouTubeApiIfNeeded() {
   firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 }
 
-window.onYouTubeIframeAPIReady = function () {
-  // API ready callback
-};
+window.onYouTubeIframeAPIReady = function () {};
 
 function createYouTubePlayer(videoId, startTime = 0) {
   loadYouTubeApiIfNeeded();
@@ -119,7 +113,6 @@ function createYouTubePlayer(videoId, startTime = 0) {
   videoPlayer = null;
 }
 
-/* ---------- Player creation ---------- */
 function createVideoPlayer(type, id, startAt = 0) {
   elements.videoPlayer.innerHTML = '';
   ytPlayer = null;
@@ -162,7 +155,6 @@ function createVideoPlayer(type, id, startAt = 0) {
   videoId = { type, id };
 }
 
-/* ---------- Firebase state ---------- */
 function updateRoomState(partialState) {
   if (!currentRoomId) return;
   const roomRef = ref(db, `rooms/${currentRoomId}`);
@@ -178,7 +170,6 @@ function updateRoomState(partialState) {
   }
 }
 
-/* ---------- Apply state to local player ---------- */
 function applyPlayPauseState() {
   if (isPlaying) {
     elements.playPauseBtn.textContent = '⏸ Pause';
@@ -215,7 +206,6 @@ function applySeekState() {
   }
 }
 
-/* ---------- Sync from Firebase ---------- */
 function syncVideo() {
   if (!currentRoomId) return;
 
@@ -244,7 +234,6 @@ function syncVideo() {
   });
 }
 
-/* ---------- Host: continuously push time ---------- */
 function startHostTimeSync() {
   setInterval(() => {
     if (!currentRoomId) return;
@@ -265,7 +254,6 @@ function startHostTimeSync() {
   }, 1000);
 }
 
-/* ---------- UI events ---------- */
 elements.createRoom.addEventListener('click', () => {
   const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
   currentRoomId = roomId;
