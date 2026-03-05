@@ -13,7 +13,7 @@ let currentTime = 0;
 let videoId = null;
 let ytReady = false;
 let isHost = false;
-let playbackRate = 1;      // NEW: speed
+let playbackRate = 1;      // speed
 
 const elements = {
   roomId: document.getElementById('roomId'),
@@ -33,7 +33,7 @@ const elements = {
   errorMsg: document.getElementById('errorMsg'),
   statusText: document.getElementById('statusText'),
   syncStatus: document.getElementById('syncStatus'),
-  playbackRate: document.getElementById('playbackRate') // NEW: dropdown
+  playbackRate: document.getElementById('playbackRate')
 };
 
 function showError(msg) {
@@ -125,9 +125,8 @@ function createYouTubePlayer(videoId, startTime = 0) {
         if (startTime > 0) {
           event.target.seekTo(startTime, true);
         }
-        event.target.setPlaybackRate(playbackRate); // NEW apply speed
+        event.target.setPlaybackRate(playbackRate);
 
-        // NEW: update time display every 500ms
         setInterval(() => {
           if (ytReady && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
             currentTime = ytPlayer.getCurrentTime() || 0;
@@ -177,7 +176,7 @@ function createVideoPlayer(type, id, startAt = 0) {
     video.style.height = '100%';
     elements.videoPlayer.appendChild(video);
     videoPlayer = video;
-    videoPlayer.playbackRate = playbackRate; // NEW
+    videoPlayer.playbackRate = playbackRate;
 
     videoPlayer.addEventListener('loadedmetadata', () => {
       const dur = videoPlayer.duration;
@@ -203,7 +202,7 @@ function updateRoomState(partialState) {
     videoId,
     isPlaying,
     currentTime,
-    playbackRate,            // NEW
+    playbackRate,
     timestamp: Date.now(),
     ...partialState
   });
@@ -243,7 +242,7 @@ function applySeekState() {
   } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
     const now = videoPlayer.currentTime || 0;
     const diff = Math.abs(now - currentTime);
-    if (diff > 0.5) {
+    if (diff > 2) { // thoda zyada tolerance
       videoPlayer.currentTime = currentTime;
     }
   }
@@ -258,7 +257,6 @@ function syncVideo() {
     const data = snapshot.val();
     if (!data) return;
 
-    // NEW speed from room
     if (typeof data.playbackRate === 'number') {
       playbackRate = data.playbackRate;
       if (elements.playbackRate) {
@@ -287,7 +285,7 @@ function syncVideo() {
   });
 }
 
-/* ---------- Host time sync ---------- */
+/* ---------- Host time sync (slower) ---------- */
 function startHostTimeSync() {
   setInterval(() => {
     if (!currentRoomId) return;
@@ -305,7 +303,7 @@ function startHostTimeSync() {
     currentTime = t;
     elements.currentTime.textContent = formatTime(currentTime);
     updateRoomState({ currentTime });
-  }, 1000);
+  }, 3000); // 3s
 }
 
 /* ---------- UI events ---------- */
@@ -373,7 +371,6 @@ elements.nextBtn.addEventListener('click', () => {
   updateRoomState({ currentTime });
 });
 
-// NEW: speed dropdown host control
 if (elements.playbackRate) {
   elements.playbackRate.addEventListener('change', () => {
     const val = parseFloat(elements.playbackRate.value);
