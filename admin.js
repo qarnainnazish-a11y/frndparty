@@ -25,7 +25,6 @@ function pretty(obj) {
   }
 }
 
-// watch single room state
 function watchRoom(roomId) {
   const roomRef = ref(db, `rooms/${roomId}`);
   onValue(roomRef, (snap) => {
@@ -34,14 +33,19 @@ function watchRoom(roomId) {
   });
 }
 
-// simple active rooms list (keys under /rooms)
 function watchAllRooms() {
   const rootRef = ref(db, 'rooms');
   onValue(rootRef, (snap) => {
     const data = snap.val() || {};
     roomsList.innerHTML = '';
 
-    Object.keys(data).forEach((roomId) => {
+    const ids = Object.keys(data);
+    if (!ids.length) {
+      roomsList.innerHTML = '<li style="opacity:0.7;">No rooms yet</li>';
+      return;
+    }
+
+    ids.forEach((roomId) => {
       const li = document.createElement('li');
       li.style.marginBottom = '4px';
 
@@ -61,7 +65,12 @@ function watchAllRooms() {
       });
 
       const span = document.createElement('span');
-      span.textContent = `  (has video: ${data[roomId]?.videoId ? 'yes' : 'no'})`;
+      const hasVideo = data[roomId]?.videoId ? 'yes' : 'no';
+      const camCount = data[roomId]?.participants
+        ? Object.values(data[roomId].participants).filter((p) => p.cameraOn).length
+        : 0;
+
+      span.textContent = `  (video: ${hasVideo}, cameras on: ${camCount})`;
       span.style.opacity = '0.7';
       span.style.fontSize = '12px';
 
@@ -69,10 +78,6 @@ function watchAllRooms() {
       li.appendChild(span);
       roomsList.appendChild(li);
     });
-
-    if (!Object.keys(data).length) {
-      roomsList.innerHTML = '<li style="opacity:0.7;">No rooms yet</li>';
-    }
   });
 }
 
@@ -87,7 +92,6 @@ adminJoinBtn.addEventListener('click', () => {
   watchRoom(roomId);
 });
 
-// URL ?room= support
 const params = new URLSearchParams(window.location.search);
 if (params.has('room')) {
   const r = params.get('room');
@@ -95,5 +99,4 @@ if (params.has('room')) {
   adminJoinBtn.click();
 }
 
-// start watching all rooms list
 watchAllRooms();
