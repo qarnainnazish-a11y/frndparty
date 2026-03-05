@@ -1,356 +1,449 @@
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getDatabase, ref, onValue, set } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
-import { firebaseConfig } from './firebase-config.js';
+import { app, db } from "./firebase-config.js";
+import {
+  ref,
+  set,
+  onValue,
+  serverTimestamp,
+  onDisconnect,
+  child,
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+const roomIdInput = document.getElementById("roomId");
+const createRoomBtn = document.getElementById("createRoom");
+const joinRoomBtn = document.getElementById("joinRoom");
+const statusDiv = document.getElementById("status");
+const videoContainer = document.getElementById("videoContainer");
+
+const prev10Btn = document.getElementById("prev10");
+const playPauseBtn = document.getElementById("playPause");
+const next10Btn = document.getElementById("next10");
+const currentTimeSpan = document.getElementById("currentTime");
+const durationSpan = document.getElementById("duration");
+
+const videoUrlInput = document.getElementById("videoUrl");
+const loadVideoBtn = document.getElementById("loadVideo");
+
+const playbackRateSelect = document.getElementById("playbackRate");
 
 let currentRoomId = null;
-let ytPlayer = null;       // YouTube player
-let videoPlayer = null;    // <video> or Drive iframe
+let isHost = false;
+
+let ytPlayer = null;
+let ytReady = false;
+let htmlVideo = null;
+
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
-let ytReady = false;
-let isHost = false;
+let playbackRate = 1;
 
-const elements = {
-  roomId: document.getElementById('roomId'),
-  createRoom: document.getElementById('createRoom'),
-  joinRoom: document.getElementById('joinRoom'),
-  roomControls: document.getElementById('roomControls'),
-  videoPlayer: document.getElementById('videoPlayer'),
-  videoUrl: document.getElementById('videoUrl'),
-  loadVideo: document.getElementById('loadVideo'),
-  playPauseBtn: document.getElementById('playPauseBtn'),
-  prevBtn: document.getElementById('prevBtn'),
-  nextBtn: document.getElementById('nextBtn'),
-  currentTime: document.getElementById('currentTime'),
-  duration: document.getElementById('duration'),
-  roomStatus: document.getElementById('roomStatus'),
-  viewerCount: document.getElementById('viewerCount'),
-  errorMsg: document.getElementById('errorMsg'),
-  statusText: document.getElementById('statusText'),
-  syncStatus: document.getElementById('syncStatus')
-};
+let localChange = false;
 
-function showError(msg) {
-  elements.errorMsg.textContent = msg;
-  elements.errorMsg.classList.remove('hidden');
-  setTimeout(() => elements.errorMsg.classList.add('hidden'), 5000);
+function formatTime(sec) {
+  if (!sec || isNaN(sec)) return "0:00";
+  sec = Math.floor(sec);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function formatTime(seconds) {
-  const mins = Math.floor(seconds / 60) || 0;
-  const secs = Math.floor(seconds % 60) || 0;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
-/* ---------- URL parsing (YouTube / Drive / Dropbox / direct) ---------- */
 function parseVideoUrl(url) {
-  // YouTube
-  const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
-  const ytMatch = url.match(ytRegex);
-  if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
+  if (!url) return null;
+  try {
+    const u = new URL(url.trim());
 
-  // Google Drive share link -> preview iframe
-  // Example: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
-  const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
-  const driveMatch = url.match(driveRegex);
-  if (driveMatch) {
-    const fileId = driveMatch[1];
-    return { type: 'drive', id: fileId };
-  }
-
-  // Dropbox share link -> convert to direct-host URL
-  // Example: https://www.dropbox.com/scl/fi/.../file.mp4?...&dl=0
-  if (url.includes('dropbox.com')) {
-    try {
-      const u = new URL(url);
-      u.hostname = 'dl.dropboxusercontent.com'; // direct file host
-      u.searchParams.delete('dl');             // dl param remove
-      return { type: 'direct', id: u.toString() };
-    } catch (e) {
-      // ignore parse error, fallback below
+    if (
+      u.hostname.includes("youtube.com") ||
+      u.hostname === "youtu.be" ||
+      u.hostname === "music.youtube.com"
+    ) {
+      let id = null;
+      if (u.hostname === "youtu.be") {
+        id = u.pathname.slice(1);
+      } else {
+        id = u.searchParams.get("v");
+      }
+      if (!id) return null;
+      return { type: "youtube", id };
     }
-  }
 
-  // Google temporary download link
-  if (url.includes('video-downloads.googleusercontent.com')) {
-    return { type: 'direct', id: url };
-  }
-
-  // Direct .mp4/.webm/.ogg URLs
-  const directRegex = /\.(mp4|webm|ogg)(\?|#|$)/i;
-  if (directRegex.test(url)) {
-    return { type: 'direct', id: url };
-  }
-
-  return null;
-}
-
-/* ---------- YouTube API ---------- */
-function loadYouTubeApiIfNeeded() {
-  if (window.YT && window.YT.Player) return;
-  const tag = document.createElement('script');
-  tag.src = 'https://www.youtube.com/iframe_api';
-  const firstScriptTag = document.getElementsByTagName('script')[0];
-  firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-}
-
-window.onYouTubeIframeAPIReady = function () {};
-
-function createYouTubePlayer(videoId, startTime = 0) {
-  loadYouTubeApiIfNeeded();
-  elements.videoPlayer.innerHTML = '<div id="yt-player"></div>';
-  ytReady = false;
-
-  ytPlayer = new YT.Player('yt-player', {
-    videoId,
-    playerVars: {
-      controls: 1,
-      modestbranding: 1
-    },
-    events: {
-      onReady: (event) => {
-        ytReady = true;
-        const dur = event.target.getDuration();
-        if (!isNaN(dur) && dur > 0) {
-          elements.duration.textContent = formatTime(dur);
-        }
-        if (startTime > 0) {
-          event.target.seekTo(startTime, true);
-        }
-        if (isPlaying) {
-          event.target.playVideo();
-        } else {
-          event.target.pauseVideo();
-        }
+    if (u.hostname.includes("drive.google.com")) {
+      const match = u.pathname.match(/\/file\/d\/([^/]+)/);
+      if (match) {
+        return { type: "gdrive", id: match[1] };
       }
     }
-  });
-  videoPlayer = null;
+
+    if (u.hostname.includes("dropbox.com")) {
+      const dl = new URL(u.toString());
+      dl.searchParams.set("dl", "1");
+      return { type: "direct", url: dl.toString() };
+    }
+
+    if (
+      u.pathname.endsWith(".mp4") ||
+      u.pathname.endsWith(".webm") ||
+      u.pathname.endsWith(".ogg")
+    ) {
+      return { type: "direct", url: u.toString() };
+    }
+
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
-/* ---------- Player creation ---------- */
-function createVideoPlayer(type, id, startAt = 0) {
-  elements.videoPlayer.innerHTML = '';
+function setStatus(text) {
+  statusDiv.textContent = text;
+}
+
+function applyPlaybackRate() {
+  if (ytPlayer && ytReady) {
+    try {
+      ytPlayer.setPlaybackRate(playbackRate);
+    } catch {}
+  } else if (htmlVideo) {
+    htmlVideo.playbackRate = playbackRate;
+  }
+}
+
+function clearPlayer() {
+  if (ytPlayer && ytPlayer.destroy) {
+    ytPlayer.destroy();
+  }
   ytPlayer = null;
   ytReady = false;
-  videoPlayer = null;
 
-  if (type === 'youtube') {
-    createYouTubePlayer(id, startAt);
-    elements.statusText.textContent = 'Loaded YouTube video';
-  } else if (type === 'drive') {
-    // Google Drive preview iframe
-    const iframe = document.createElement('iframe');
-    iframe.src = `https://drive.google.com/file/d/${id}/preview`;
-    iframe.allow = 'autoplay';
-    iframe.allowFullscreen = true;
-    iframe.style.width = '100%';
-    iframe.style.height = '100%';
-    iframe.style.border = '0';
-    elements.videoPlayer.appendChild(iframe);
-    videoPlayer = iframe;
-    elements.statusText.textContent = 'Loaded Google Drive video (preview)';
-    // Drive preview me duration/control JS se nahi milta, ye limitation hai.[web:106][web:111]
-  } else if (type === 'direct') {
-    // Direct video (Dropbox converted link, raw mp4, etc.)
-    const video = document.createElement('video');
-    video.src = id;
-    video.controls = true;
-    video.autoplay = false;
-    video.playsInline = true;
-    video.style.width = '100%';
-    video.style.height = '100%';
-    elements.videoPlayer.appendChild(video);
-    videoPlayer = video;
-    elements.statusText.textContent = 'Loaded direct video link';
-
-    videoPlayer.addEventListener('loadedmetadata', () => {
-      const dur = videoPlayer.duration;
-      if (!isNaN(dur)) {
-        elements.duration.textContent = formatTime(dur);
-      }
-    });
+  if (htmlVideo && htmlVideo.parentNode) {
+    htmlVideo.parentNode.removeChild(htmlVideo);
   }
+  htmlVideo = null;
 
-  videoId = { type, id };
+  videoContainer.innerHTML = "";
 }
 
-/* ---------- Firebase state ---------- */
-function updateRoomState(partialState) {
+function loadVideoIntoPlayer(parsed, startTime = 0) {
+  clearPlayer();
+  isPlaying = false;
+  currentTime = startTime || 0;
+
+  if (!parsed) {
+    currentTimeSpan.textContent = "0:00";
+    durationSpan.textContent = "0:00";
+    return;
+  }
+
+  if (parsed.type === "youtube") {
+    const ytDiv = document.createElement("div");
+    ytDiv.id = "ytplayer";
+    videoContainer.appendChild(ytDiv);
+
+    function createYT() {
+      ytPlayer = new YT.Player("ytplayer", {
+        width: "100%",
+        height: "100%",
+        videoId: parsed.id,
+        playerVars: {
+          playsinline: 1,
+          origin: window.location.origin,
+        },
+        events: {
+          onReady: (event) => {
+            ytReady = true;
+            const dur = event.target.getDuration();
+            if (!isNaN(dur) && dur > 0) {
+              durationSpan.textContent = formatTime(dur);
+            }
+            if (startTime > 0) {
+              event.target.seekTo(startTime, true);
+            }
+            event.target.setPlaybackRate(playbackRate);
+            if (isPlaying) {
+              event.target.playVideo();
+            } else {
+              event.target.pauseVideo();
+            }
+          },
+          onStateChange: (event) => {
+            if (!isHost) return;
+            if (localChange) return;
+
+            if (event.data === YT.PlayerState.PLAYING) {
+              isPlaying = true;
+              currentTime = ytPlayer.getCurrentTime();
+              updateRoomState({ isPlaying: true, currentTime });
+            } else if (event.data === YT.PlayerState.PAUSED) {
+              isPlaying = false;
+              currentTime = ytPlayer.getCurrentTime();
+              updateRoomState({ isPlaying: false, currentTime });
+            }
+          },
+        },
+      });
+    }
+
+    if (!window.YT) {
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      window.onYouTubeIframeAPIReady = createYT;
+      document.head.appendChild(tag);
+    } else if (window.YT && window.YT.Player) {
+      createYT();
+    } else {
+      window.onYouTubeIframeAPIReady = createYT;
+    }
+  } else if (parsed.type === "gdrive") {
+    const iframe = document.createElement("iframe");
+    iframe.src = `https://drive.google.com/file/d/${parsed.id}/preview`;
+    iframe.allow =
+      "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+    iframe.allowFullscreen = true;
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    videoContainer.appendChild(iframe);
+  } else if (parsed.type === "direct") {
+    const v = document.createElement("video");
+    v.src = parsed.url;
+    v.controls = false;
+    v.style.width = "100%";
+    v.style.height = "100%";
+
+    htmlVideo = v;
+    htmlVideo.playbackRate = playbackRate;
+
+    v.addEventListener("loadedmetadata", () => {
+      durationSpan.textContent = formatTime(v.duration);
+      if (startTime > 0) {
+        v.currentTime = startTime;
+      }
+    });
+
+    v.addEventListener("timeupdate", () => {
+      currentTime = v.currentTime;
+      currentTimeSpan.textContent = formatTime(currentTime);
+    });
+
+    v.addEventListener("play", () => {
+      if (!isHost || localChange) return;
+      isPlaying = true;
+      currentTime = v.currentTime;
+      updateRoomState({ isPlaying: true, currentTime });
+    });
+
+    v.addEventListener("pause", () => {
+      if (!isHost || localChange) return;
+      isPlaying = false;
+      currentTime = v.currentTime;
+      updateRoomState({ isPlaying: false, currentTime });
+    });
+
+    videoContainer.appendChild(v);
+  }
+
+  currentTimeSpan.textContent = formatTime(currentTime);
+}
+
+function updateRoomState(partial) {
   if (!currentRoomId) return;
   const roomRef = ref(db, `rooms/${currentRoomId}`);
+
   set(roomRef, {
     videoId,
     isPlaying,
     currentTime,
+    playbackRate,
     timestamp: Date.now(),
-    ...partialState
+    ...partial,
   });
-  if (elements.syncStatus) {
-    elements.syncStatus.textContent = 'Synced just now';
-  }
+
+  setStatus("Synced");
 }
 
-/* ---------- Apply local state ---------- */
-function applyPlayPauseState() {
-  if (isPlaying) {
-    elements.playPauseBtn.textContent = '⏸ Pause';
-    if (ytPlayer && ytReady) {
-      ytPlayer.playVideo();
-    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
-      videoPlayer.play();
-    }
-    // Drive iframe ko JS se play nahi kara sakte; user iframe ke Play pe click karega.[web:106][web:111]
-  } else {
-    elements.playPauseBtn.textContent = '▶️ Play';
-    if (ytPlayer && ytReady) {
-      ytPlayer.pauseVideo();
-    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
-      videoPlayer.pause();
-    }
-  }
-}
+function joinRoom(roomId, asHost) {
+  currentRoomId = roomId;
+  isHost = asHost;
 
-function applySeekState() {
-  elements.currentTime.textContent = formatTime(currentTime);
+  setStatus(`Joined room ${roomId} as ${isHost ? "host" : "guest"}`);
 
-  if (ytPlayer && ytReady) {
-    const now = ytPlayer.getCurrentTime() || 0;
-    const diff = Math.abs(now - currentTime);
-    if (diff > 1.0) {
-      ytPlayer.seekTo(currentTime, true);
-    }
-  } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
-    const now = videoPlayer.currentTime || 0;
-    const diff = Math.abs(now - currentTime);
-    if (diff > 0.5) {
-      videoPlayer.currentTime = currentTime;
-    }
-  }
-  // Drive iframe me seek handle nahi kar sakte.[web:106][web:111]
-}
+  const viewersRef = ref(db, `rooms/${roomId}/viewers`);
+  const myId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  const myRef = child(viewersRef, myId);
+  set(myRef, { joinedAt: serverTimestamp() });
+  onDisconnect(myRef).remove();
 
-/* ---------- Sync from Firebase ---------- */
-function syncVideo() {
-  if (!currentRoomId) return;
-
-  const roomRef = ref(db, `rooms/${currentRoomId}`);
-  onValue(roomRef, (snapshot) => {
-    const data = snapshot.val();
+  const roomRef = ref(db, `rooms/${roomId}`);
+  onValue(roomRef, (snap) => {
+    const data = snap.val();
     if (!data) return;
 
-    if (data.videoId && (data.videoId.type !== videoId?.type || data.videoId.id !== videoId?.id)) {
-      createVideoPlayer(data.videoId.type, data.videoId.id, data.currentTime || 0);
-    }
+    localChange = true;
+    try {
+      if (typeof data.playbackRate === "number") {
+        playbackRate = data.playbackRate;
+        playbackRateSelect.value = String(playbackRate);
+        applyPlaybackRate();
+      }
 
-    if (typeof data.isPlaying === 'boolean') {
-      isPlaying = data.isPlaying;
-      applyPlayPauseState();
-    }
+      if (data.videoId && data.videoId !== videoId) {
+        videoId = data.videoId;
+        const parsed = parseVideoUrl(videoId);
+        loadVideoIntoPlayer(parsed, data.currentTime || 0);
+      }
 
-    if (typeof data.currentTime === 'number') {
-      currentTime = data.currentTime;
-      applySeekState();
-    }
+      if (!isHost) {
+        if (typeof data.currentTime === "number") {
+          currentTime = data.currentTime;
+        }
+        if (typeof data.isPlaying === "boolean") {
+          isPlaying = data.isPlaying;
+        }
 
-    if (typeof data.duration === 'number') {
-      elements.duration.textContent = formatTime(data.duration);
+        if (ytPlayer && ytReady) {
+          const diff = Math.abs(ytPlayer.getCurrentTime() - currentTime);
+          if (diff > 1) {
+            ytPlayer.seekTo(currentTime, true);
+          }
+          if (isPlaying) ytPlayer.playVideo();
+          else ytPlayer.pauseVideo();
+        } else if (htmlVideo) {
+          const diff = Math.abs(htmlVideo.currentTime - currentTime);
+          if (diff > 1) {
+            htmlVideo.currentTime = currentTime;
+          }
+          if (isPlaying && htmlVideo.paused) htmlVideo.play();
+          if (!isPlaying && !htmlVideo.paused) htmlVideo.pause();
+        }
+
+        currentTimeSpan.textContent = formatTime(currentTime);
+      }
+    } finally {
+      localChange = false;
     }
   });
 }
 
-/* ---------- Host time sync ---------- */
-function startHostTimeSync() {
-  setInterval(() => {
-    if (!currentRoomId) return;
-    if (!isHost) return;
+// UI events
 
-    let t = 0;
-    if (ytPlayer && ytReady) {
-      t = ytPlayer.getCurrentTime() || 0;
-    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
-      t = videoPlayer.currentTime || 0;
-    } else {
-      return;
-    }
-
-    currentTime = t;
-    elements.currentTime.textContent = formatTime(currentTime);
-    updateRoomState({ currentTime });
-  }, 1000);
-}
-
-/* ---------- UI events ---------- */
-elements.createRoom.addEventListener('click', () => {
-  const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
-  currentRoomId = roomId;
-  isHost = true;
-  elements.roomId.value = roomId;
-  elements.roomStatus.textContent = `Room: ${roomId}`;
-  elements.roomControls.classList.remove('hidden');
-  elements.statusText.textContent = 'Room created. Load a video to start.';
-  syncVideo();
-  startHostTimeSync();
+createRoomBtn.addEventListener("click", () => {
+  const roomId = roomIdInput.value.trim();
+  if (!roomId) return;
+  joinRoom(roomId, true);
 });
 
-elements.joinRoom.addEventListener('click', () => {
-  const roomId = elements.roomId.value.trim();
-  if (!roomId) {
-    showError('Enter a room ID first');
-    return;
-  }
-  currentRoomId = roomId;
-  isHost = false;
-  elements.roomStatus.textContent = `Room: ${roomId}`;
-  elements.roomControls.classList.remove('hidden');
-  elements.statusText.textContent = 'Joined room. Waiting for host to load a video.';
-  syncVideo();
-  startHostTimeSync();
+joinRoomBtn.addEventListener("click", () => {
+  const roomId = roomIdInput.value.trim();
+  if (!roomId) return;
+  joinRoom(roomId, false);
 });
 
-elements.loadVideo.addEventListener('click', () => {
-  const url = elements.videoUrl.value.trim();
-  if (!url) {
-    showError('Enter a video URL');
-    return;
-  }
-
+loadVideoBtn.addEventListener("click", () => {
+  const url = videoUrlInput.value.trim();
   const parsed = parseVideoUrl(url);
   if (!parsed) {
-    showError('Unsupported URL. Use YouTube, Google Drive, Dropbox, or direct MP4/WebM');
+    setStatus("Unsupported link");
     return;
   }
 
-  createVideoPlayer(parsed.type, parsed.id, 0);
-  isPlaying = false;
+  videoId = url;
   currentTime = 0;
-  elements.currentTime.textContent = '0:00';
-  elements.duration.textContent = '0:00';
-  elements.statusText.textContent = 'Video loaded. Press Play to start.';
-  updateRoomState({ videoId: parsed, currentTime, isPlaying });
+  isPlaying = false;
+  loadVideoIntoPlayer(parsed, 0);
+
+  if (currentRoomId && isHost) {
+    updateRoomState({ videoId, currentTime: 0, isPlaying: false });
+  }
 });
 
-elements.playPauseBtn.addEventListener('click', () => {
-  isPlaying = !isPlaying;
-  updateRoomState({ isPlaying });
+playPauseBtn.addEventListener("click", () => {
+  if (!currentRoomId) return;
+
+  if (ytPlayer && ytReady) {
+    localChange = true;
+    try {
+      if (isPlaying) {
+        ytPlayer.pauseVideo();
+        isPlaying = false;
+      } else {
+        ytPlayer.playVideo();
+        isPlaying = true;
+      }
+      currentTime = ytPlayer.getCurrentTime();
+      if (isHost) {
+        updateRoomState({ isPlaying, currentTime });
+      }
+    } finally {
+      localChange = false;
+    }
+  } else if (htmlVideo) {
+    localChange = true;
+    try {
+      if (htmlVideo.paused) {
+        htmlVideo.play();
+        isPlaying = true;
+      } else {
+        htmlVideo.pause();
+        isPlaying = false;
+      }
+      currentTime = htmlVideo.currentTime;
+      if (isHost) {
+        updateRoomState({ isPlaying, currentTime });
+      }
+    } finally {
+      localChange = false;
+    }
+  }
 });
 
-elements.prevBtn.addEventListener('click', () => {
+prev10Btn.addEventListener("click", () => {
+  if (!currentRoomId) return;
+
   currentTime = Math.max(0, currentTime - 10);
-  updateRoomState({ currentTime });
+
+  if (ytPlayer && ytReady) {
+    localChange = true;
+    ytPlayer.seekTo(currentTime, true);
+    if (!isPlaying) ytPlayer.pauseVideo();
+    localChange = false;
+  } else if (htmlVideo) {
+    localChange = true;
+    htmlVideo.currentTime = currentTime;
+    localChange = false;
+  }
+
+  if (isHost) {
+    updateRoomState({ currentTime });
+  }
 });
 
-elements.nextBtn.addEventListener('click', () => {
-  currentTime += 10;
-  updateRoomState({ currentTime });
+next10Btn.addEventListener("click", () => {
+  if (!currentRoomId) return;
+
+  currentTime = currentTime + 10;
+
+  if (ytPlayer && ytReady) {
+    localChange = true;
+    ytPlayer.seekTo(currentTime, true);
+    if (!isPlaying) ytPlayer.pauseVideo();
+    localChange = false;
+  } else if (htmlVideo) {
+    localChange = true;
+    htmlVideo.currentTime = currentTime;
+    localChange = false;
+  }
+
+  if (isHost) {
+    updateRoomState({ currentTime });
+  }
 });
 
-const urlParams = new URLSearchParams(window.location.search);
-if (urlParams.has('room')) {
-  elements.roomId.value = urlParams.get('room');
-  elements.joinRoom.click();
-}
+playbackRateSelect.addEventListener("change", () => {
+  const val = parseFloat(playbackRateSelect.value);
+  if (!isNaN(val) && val > 0) {
+    playbackRate = val;
+    applyPlaybackRate();
+    if (currentRoomId && isHost) {
+      updateRoomState({ playbackRate });
+    }
+  }
+});
