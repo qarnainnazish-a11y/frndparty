@@ -1,19 +1,28 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getDatabase, ref, onValue, set } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
+import {
+  getDatabase,
+  ref,
+  onValue,
+  set
+} from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 let currentRoomId = null;
-let ytPlayer = null;       // YouTube player
-let videoPlayer = null;    // <video> or Drive iframe
+let ytPlayer = null;
+let videoPlayer = null;
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
 let ytReady = false;
 let isHost = false;
-let playbackRate = 1;      // speed
+let playbackRate = 1;
+
+// camera
+let localStream = null;
+let participantId = null;
 
 const elements = {
   roomId: document.getElementById('roomId'),
@@ -33,7 +42,10 @@ const elements = {
   errorMsg: document.getElementById('errorMsg'),
   statusText: document.getElementById('statusText'),
   syncStatus: document.getElementById('syncStatus'),
-  playbackRate: document.getElementById('playbackRate')
+  playbackRate: document.getElementById('playbackRate'),
+  toggleCameraBtn: document.getElementById('toggleCameraBtn'),
+  cameraPreviewWrapper: document.getElementById('cameraPreviewWrapper'),
+  localCameraPreview: document.getElementById('localCameraPreview')
 };
 
 function showError(msg) {
@@ -48,7 +60,11 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-/* ---------- URL parsing (YouTube / Drive / Dropbox / direct) ---------- */
+function makeId() {
+  return `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+}
+
+/* ---------- URL parsing ---------- */
 function parseVideoUrl(url) {
   const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
   const ytMatch = url.match(ytRegex);
@@ -90,6 +106,61 @@ function applyPlaybackRate() {
     } catch {}
   } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
     videoPlayer.playbackRate = playbackRate;
+  }
+}
+
+/* ---------- Camera helpers ---------- */
+async function enableCamera() {
+  if (localStream) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false
+    });
+    localStream = stream;
+    if (elements.localCameraPreview) {
+      elements.localCameraPreview.srcObject = stream;
+    }
+    if (elements.cameraPreviewWrapper) {
+      elements.cameraPreviewWrapper.classList.remove('hidden');
+    }
+    if (elements.toggleCameraBtn) {
+      elements.toggleCameraBtn.textContent = '📷 Stop sharing camera';
+    }
+
+    if (currentRoomId && participantId) {
+      const pRef = ref(db, `rooms/${currentRoomId}/participants/${participantId}`);
+      set(pRef, {
+        cameraOn: true,
+        updatedAt: Date.now()
+      });
+    }
+  } catch (err) {
+    showError('Camera permission denied or not available');
+  }
+}
+
+function disableCamera() {
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  if (elements.localCameraPreview) {
+    elements.localCameraPreview.srcObject = null;
+  }
+  if (elements.cameraPreviewWrapper) {
+    elements.cameraPreviewWrapper.classList.add('hidden');
+  }
+  if (elements.toggleCameraBtn) {
+    elements.toggleCameraBtn.textContent = '📷 Share camera with admin';
+  }
+
+  if (currentRoomId && participantId) {
+    const pRef = ref(db, `rooms/${currentRoomId}/participants/${participantId}`);
+    set(pRef, {
+      cameraOn: false,
+      updatedAt: Date.now()
+    });
   }
 }
 
@@ -242,7 +313,7 @@ function applySeekState() {
   } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
     const now = videoPlayer.currentTime || 0;
     const diff = Math.abs(now - currentTime);
-    if (diff > 2) { // thoda zyada tolerance
+    if (diff > 2) {
       videoPlayer.currentTime = currentTime;
     }
   }
@@ -285,7 +356,7 @@ function syncVideo() {
   });
 }
 
-/* ---------- Host time sync (slower) ---------- */
+/* ---------- Host time sync ---------- */
 function startHostTimeSync() {
   setInterval(() => {
     if (!currentRoomId) return;
@@ -303,20 +374,39 @@ function startHostTimeSync() {
     currentTime = t;
     elements.currentTime.textContent = formatTime(currentTime);
     updateRoomState({ currentTime });
-  }, 3000); // 3s
+  }, 3000);
+}
+
+/* ---------- Room join ---------- */
+function joinRoom(roomId, asHost) {
+  currentRoomId = roomId;
+  isHost = asHost;
+
+  if (!participantId) {
+    participantId = makeId();
+  }
+
+  elements.roomControls.classList.remove('hidden');
+  elements.roomStatus.textContent = `Room: ${roomId} (${isHost ? 'Host' : 'Guest'})`;
+  elements.statusText.textContent = isHost
+    ? 'Room created. Load a video to start.'
+    : 'Joined room. Waiting for host to load a video.';
+
+  const pRef = ref(db, `rooms/${roomId}/participants/${participantId}`);
+  set(pRef, {
+    cameraOn: false,
+    joinedAt: Date.now()
+  });
+
+  syncVideo();
+  startHostTimeSync();
 }
 
 /* ---------- UI events ---------- */
 elements.createRoom.addEventListener('click', () => {
   const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
-  currentRoomId = roomId;
-  isHost = true;
   elements.roomId.value = roomId;
-  elements.roomStatus.textContent = `Room: ${roomId}`;
-  elements.roomControls.classList.remove('hidden');
-  elements.statusText.textContent = 'Room created. Load a video to start.';
-  syncVideo();
-  startHostTimeSync();
+  joinRoom(roomId, true);
 });
 
 elements.joinRoom.addEventListener('click', () => {
@@ -325,13 +415,7 @@ elements.joinRoom.addEventListener('click', () => {
     showError('Enter a room ID first');
     return;
   }
-  currentRoomId = roomId;
-  isHost = false;
-  elements.roomStatus.textContent = `Room: ${roomId}`;
-  elements.roomControls.classList.remove('hidden');
-  elements.statusText.textContent = 'Joined room. Waiting for host to load a video.';
-  syncVideo();
-  startHostTimeSync();
+  joinRoom(roomId, false);
 });
 
 elements.loadVideo.addEventListener('click', () => {
@@ -380,6 +464,16 @@ if (elements.playbackRate) {
       if (currentRoomId && isHost) {
         updateRoomState({ playbackRate });
       }
+    }
+  });
+}
+
+if (elements.toggleCameraBtn) {
+  elements.toggleCameraBtn.addEventListener('click', () => {
+    if (localStream) {
+      disableCamera();
+    } else {
+      enableCamera();
     }
   });
 }
