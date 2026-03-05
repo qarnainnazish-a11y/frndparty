@@ -1,312 +1,265 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import {
-  getDatabase,
-  ref,
-  onValue,
-  set,
-  serverTimestamp,
-  onDisconnect,
-  child,
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
-import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
+import { getDatabase, ref, onValue, set } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
+import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 let currentRoomId = null;
-let ytPlayer = null; // YouTube player
-let videoPlayer = null; // <video> or Drive iframe
+let ytPlayer = null;       // YouTube player
+let videoPlayer = null;    // <video> or Drive iframe
 let isPlaying = false;
 let currentTime = 0;
 let videoId = null;
 let ytReady = false;
 let isHost = false;
-let playbackRate = 1; // NEW: speed state
+let playbackRate = 1;      // NEW: speed
 
 const elements = {
-  roomId: document.getElementById("roomId"),
-  createRoom: document.getElementById("createRoom"),
-  joinRoom: document.getElementById("joinRoom"),
-  roomControls: document.getElementById("roomControls"),
-  videoPlayer: document.getElementById("videoPlayer"),
-  videoUrl: document.getElementById("videoUrl"),
-  loadVideo: document.getElementById("loadVideo"),
-  playPauseBtn: document.getElementById("playPauseBtn"),
-  prevBtn: document.getElementById("prevBtn"),
-  nextBtn: document.getElementById("nextBtn"),
-  currentTime: document.getElementById("currentTime"),
-  duration: document.getElementById("duration"),
-  roomStatus: document.getElementById("roomStatus"),
-  viewerCount: document.getElementById("viewerCount"),
-  errorMsg: document.getElementById("errorMsg"),
-  statusText: document.getElementById("statusText"),
-  syncStatus: document.getElementById("syncStatus"),
-  playbackRate: document.getElementById("playbackRate"), // NEW: dropdown
+  roomId: document.getElementById('roomId'),
+  createRoom: document.getElementById('createRoom'),
+  joinRoom: document.getElementById('joinRoom'),
+  roomControls: document.getElementById('roomControls'),
+  videoPlayer: document.getElementById('videoPlayer'),
+  videoUrl: document.getElementById('videoUrl'),
+  loadVideo: document.getElementById('loadVideo'),
+  playPauseBtn: document.getElementById('playPauseBtn'),
+  prevBtn: document.getElementById('prevBtn'),
+  nextBtn: document.getElementById('nextBtn'),
+  currentTime: document.getElementById('currentTime'),
+  duration: document.getElementById('duration'),
+  roomStatus: document.getElementById('roomStatus'),
+  viewerCount: document.getElementById('viewerCount'),
+  errorMsg: document.getElementById('errorMsg'),
+  statusText: document.getElementById('statusText'),
+  syncStatus: document.getElementById('syncStatus'),
+  playbackRate: document.getElementById('playbackRate') // NEW: dropdown
 };
 
-function formatTime(sec) {
-  if (!sec || isNaN(sec)) return "0:00";
-  sec = Math.floor(sec);
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+function showError(msg) {
+  elements.errorMsg.textContent = msg;
+  elements.errorMsg.classList.remove('hidden');
+  setTimeout(() => elements.errorMsg.classList.add('hidden'), 5000);
 }
 
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60) || 0;
+  const secs = Math.floor(seconds % 60) || 0;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/* ---------- URL parsing (YouTube / Drive / Dropbox / direct) ---------- */
 function parseVideoUrl(url) {
-  if (!url) return null;
-  try {
-    const u = new URL(url.trim());
+  const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/;
+  const ytMatch = url.match(ytRegex);
+  if (ytMatch) return { type: 'youtube', id: ytMatch[1] };
 
-    if (
-      u.hostname.includes("youtube.com") ||
-      u.hostname === "youtu.be" ||
-      u.hostname === "music.youtube.com"
-    ) {
-      let id = null;
-      if (u.hostname === "youtu.be") {
-        id = u.pathname.slice(1);
-      } else {
-        id = u.searchParams.get("v");
-      }
-      if (!id) return null;
-      return { type: "youtube", id };
-    }
-
-    if (u.hostname.includes("drive.google.com")) {
-      const match = u.pathname.match(/\/file\/d\/([^/]+)/);
-      if (match) {
-        return { type: "gdrive", id: match[1] };
-      }
-    }
-
-    if (u.hostname.includes("dropbox.com")) {
-      const dl = new URL(u.toString());
-      dl.searchParams.set("dl", "1");
-      return { type: "direct", url: dl.toString() };
-    }
-
-    if (
-      u.pathname.endsWith(".mp4") ||
-      u.pathname.endsWith(".webm") ||
-      u.pathname.endsWith(".ogg")
-    ) {
-      return { type: "direct", url: u.toString() };
-    }
-
-    return null;
-  } catch (e) {
-    return null;
+  const driveRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
+  const driveMatch = url.match(driveRegex);
+  if (driveMatch) {
+    const fileId = driveMatch[1];
+    return { type: 'drive', id: fileId };
   }
+
+  if (url.includes('dropbox.com')) {
+    try {
+      const u = new URL(url);
+      u.hostname = 'dl.dropboxusercontent.com';
+      u.searchParams.delete('dl');
+      return { type: 'direct', id: u.toString() };
+    } catch (e) {}
+  }
+
+  if (url.includes('video-downloads.googleusercontent.com')) {
+    return { type: 'direct', id: url };
+  }
+
+  const directRegex = /\.(mp4|webm|ogg)(\?|#|$)/i;
+  if (directRegex.test(url)) {
+    return { type: 'direct', id: url };
+  }
+
+  return null;
 }
 
-function setStatus(text) {
-  elements.syncStatus.textContent = text;
-}
-
-function showError(text) {
-  elements.errorMsg.textContent = text;
-  elements.errorMsg.classList.remove("hidden");
-}
-
-function clearError() {
-  elements.errorMsg.textContent = "";
-  elements.errorMsg.classList.add("hidden");
-}
-
+/* ---------- Speed helper ---------- */
 function applyPlaybackRate() {
   if (ytPlayer && ytReady) {
     try {
       ytPlayer.setPlaybackRate(playbackRate);
     } catch {}
-  } else if (videoPlayer && videoPlayer.tagName === "VIDEO") {
+  } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
     videoPlayer.playbackRate = playbackRate;
   }
 }
 
-function clearPlayer() {
-  if (ytPlayer && ytPlayer.destroy) {
-    ytPlayer.destroy();
-  }
-  ytPlayer = null;
-  ytReady = false;
-
-  if (videoPlayer && videoPlayer.parentNode) {
-    videoPlayer.parentNode.removeChild(videoPlayer);
-  }
-  videoPlayer = null;
-
-  elements.videoPlayer.innerHTML = "";
+/* ---------- YouTube API ---------- */
+function loadYouTubeApiIfNeeded() {
+  if (window.YT && window.YT.Player) return;
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  const firstScriptTag = document.getElementsByTagName('script')[0];
+  firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 }
 
-function loadVideoIntoPlayer(parsed, startTime = 0) {
-  clearError();
-  clearPlayer();
-  isPlaying = false;
-  currentTime = startTime || 0;
+window.onYouTubeIframeAPIReady = function () {};
 
-  if (!parsed) {
-    elements.currentTime.textContent = "0:00";
-    elements.duration.textContent = "0:00";
-    return;
-  }
+function createYouTubePlayer(videoId, startTime = 0) {
+  loadYouTubeApiIfNeeded();
+  elements.videoPlayer.innerHTML = '<div id="yt-player"></div>';
+  ytReady = false;
 
-  if (parsed.type === "youtube") {
-    const ytDiv = document.createElement("div");
-    ytDiv.id = "ytplayer";
-    elements.videoPlayer.appendChild(ytDiv);
+  ytPlayer = new YT.Player('yt-player', {
+    videoId,
+    playerVars: {
+      controls: 1,
+      modestbranding: 1
+    },
+    events: {
+      onReady: (event) => {
+        ytReady = true;
+        const dur = event.target.getDuration();
+        if (!isNaN(dur) && dur > 0) {
+          elements.duration.textContent = formatTime(dur);
+        }
+        if (startTime > 0) {
+          event.target.seekTo(startTime, true);
+        }
+        event.target.setPlaybackRate(playbackRate); // NEW apply speed
 
-    function createYT() {
-      ytPlayer = new YT.Player("ytplayer", {
-        width: "100%",
-        height: "100%",
-        videoId: parsed.id,
-        playerVars: {
-          playsinline: 1,
-          origin: window.location.origin,
-        },
-        events: {
-          onReady: (event) => {
-            ytReady = true;
-            const dur = event.target.getDuration();
-            if (!isNaN(dur) && dur > 0) {
-              elements.duration.textContent = formatTime(dur);
-            }
-            if (startTime > 0) {
-              event.target.seekTo(startTime, true);
-            }
-            event.target.setPlaybackRate(playbackRate); // NEW
-            if (isPlaying) {
-              event.target.playVideo();
-            } else {
-              event.target.pauseVideo();
-            }
-          },
-          onStateChange: (event) => {
-            if (!isHost) return;
+        // NEW: update time display every 500ms
+        setInterval(() => {
+          if (ytReady && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+            currentTime = ytPlayer.getCurrentTime() || 0;
+            elements.currentTime.textContent = formatTime(currentTime);
+          }
+        }, 500);
 
-            if (event.data === YT.PlayerState.PLAYING) {
-              isPlaying = true;
-              currentTime = ytPlayer.getCurrentTime();
-              updateRoomState({ isPlaying: true, currentTime });
-            } else if (event.data === YT.PlayerState.PAUSED) {
-              isPlaying = false;
-              currentTime = ytPlayer.getCurrentTime();
-              updateRoomState({ isPlaying: false, currentTime });
-            }
-          },
-        },
-      });
+        if (isPlaying) {
+          event.target.playVideo();
+        } else {
+          event.target.pauseVideo();
+        }
+      }
     }
+  });
+  videoPlayer = null;
+}
 
-    if (!window.YT) {
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      window.onYouTubeIframeAPIReady = createYT;
-      document.head.appendChild(tag);
-    } else if (window.YT && window.YT.Player) {
-      createYT();
-    } else {
-      window.onYouTubeIframeAPIReady = createYT;
-    }
-  } else if (parsed.type === "gdrive") {
-    const iframe = document.createElement("iframe");
-    iframe.src = `https://drive.google.com/file/d/${parsed.id}/preview`;
-    iframe.allow =
-      "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+/* ---------- Player creation ---------- */
+function createVideoPlayer(type, id, startAt = 0) {
+  elements.videoPlayer.innerHTML = '';
+  ytPlayer = null;
+  ytReady = false;
+  videoPlayer = null;
+
+  if (type === 'youtube') {
+    createYouTubePlayer(id, startAt);
+    elements.statusText.textContent = 'Loaded YouTube video';
+  } else if (type === 'drive') {
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://drive.google.com/file/d/${id}/preview`;
+    iframe.allow = 'autoplay';
     iframe.allowFullscreen = true;
-    iframe.style.width = "100%";
-    iframe.style.height = "100%";
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = '0';
     elements.videoPlayer.appendChild(iframe);
-  } else if (parsed.type === "direct") {
-    const v = document.createElement("video");
-    v.src = parsed.url;
-    v.controls = false;
-    v.style.width = "100%";
-    v.style.height = "100%";
-
-    videoPlayer = v;
+    videoPlayer = iframe;
+    elements.statusText.textContent = 'Loaded Google Drive video (preview)';
+  } else if (type === 'direct') {
+    const video = document.createElement('video');
+    video.src = id;
+    video.controls = true;
+    video.autoplay = false;
+    video.playsInline = true;
+    video.style.width = '100%';
+    video.style.height = '100%';
+    elements.videoPlayer.appendChild(video);
+    videoPlayer = video;
     videoPlayer.playbackRate = playbackRate; // NEW
 
-    v.addEventListener("loadedmetadata", () => {
-      elements.duration.textContent = formatTime(v.duration);
-      if (startTime > 0) {
-        v.currentTime = startTime;
+    videoPlayer.addEventListener('loadedmetadata', () => {
+      const dur = videoPlayer.duration;
+      if (!isNaN(dur)) {
+        elements.duration.textContent = formatTime(dur);
       }
     });
 
-    v.addEventListener("timeupdate", () => {
-      currentTime = v.currentTime;
+    videoPlayer.addEventListener('timeupdate', () => {
+      currentTime = videoPlayer.currentTime || 0;
       elements.currentTime.textContent = formatTime(currentTime);
     });
-
-    v.addEventListener("play", () => {
-      if (!isHost) return;
-      isPlaying = true;
-      currentTime = v.currentTime;
-      updateRoomState({ isPlaying: true, currentTime });
-    });
-
-    v.addEventListener("pause", () => {
-      if (!isHost) return;
-      isPlaying = false;
-      currentTime = v.currentTime;
-      updateRoomState({ isPlaying: false, currentTime });
-    });
-
-    elements.videoPlayer.appendChild(v);
   }
 
-  elements.currentTime.textContent = formatTime(currentTime);
+  videoId = { type, id };
 }
 
-function updateRoomState(partial) {
+/* ---------- Firebase state ---------- */
+function updateRoomState(partialState) {
   if (!currentRoomId) return;
   const roomRef = ref(db, `rooms/${currentRoomId}`);
-
   set(roomRef, {
     videoId,
     isPlaying,
     currentTime,
-    playbackRate, // NEW
+    playbackRate,            // NEW
     timestamp: Date.now(),
-    ...partial,
+    ...partialState
   });
-
-  setStatus("Synced");
+  if (elements.syncStatus) {
+    elements.syncStatus.textContent = 'Synced just now';
+  }
 }
 
-function joinRoom(roomId, asHost) {
-  currentRoomId = roomId;
-  isHost = asHost;
+/* ---------- Apply local state ---------- */
+function applyPlayPauseState() {
+  if (isPlaying) {
+    elements.playPauseBtn.textContent = '⏸ Pause';
+    if (ytPlayer && ytReady) {
+      ytPlayer.playVideo();
+    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+      videoPlayer.play();
+    }
+  } else {
+    elements.playPauseBtn.textContent = '▶️ Play';
+    if (ytPlayer && ytReady) {
+      ytPlayer.pauseVideo();
+    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+      videoPlayer.pause();
+    }
+  }
+}
 
-  elements.roomControls.classList.remove("hidden");
-  elements.roomStatus.textContent = `Room: ${roomId} (${
-    isHost ? "Host" : "Guest"
-  })`;
-  elements.statusText.textContent = isHost
-    ? "Paste a video link and click Load."
-    : "Wait for host to load and control video.";
+function applySeekState() {
+  elements.currentTime.textContent = formatTime(currentTime);
 
-  const viewersRef = ref(db, `rooms/${roomId}/viewers`);
-  const myId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-  const myRef = child(viewersRef, myId);
-  set(myRef, { joinedAt: serverTimestamp() });
-  onDisconnect(myRef).remove();
+  if (ytPlayer && ytReady) {
+    const now = ytPlayer.getCurrentTime() || 0;
+    const diff = Math.abs(now - currentTime);
+    if (diff > 1.0) {
+      ytPlayer.seekTo(currentTime, true);
+    }
+  } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+    const now = videoPlayer.currentTime || 0;
+    const diff = Math.abs(now - currentTime);
+    if (diff > 0.5) {
+      videoPlayer.currentTime = currentTime;
+    }
+  }
+}
 
-  onValue(viewersRef, (snap) => {
-    const val = snap.val() || {};
-    const count = Object.keys(val).length;
-    elements.viewerCount.textContent = `👥 ${count} viewer${
-      count === 1 ? "" : "s"
-    }`;
-  });
+/* ---------- Sync from Firebase ---------- */
+function syncVideo() {
+  if (!currentRoomId) return;
 
-  const roomRef = ref(db, `rooms/${roomId}`);
-  onValue(roomRef, (snap) => {
-    const data = snap.val();
+  const roomRef = ref(db, `rooms/${currentRoomId}`);
+  onValue(roomRef, (snapshot) => {
+    const data = snapshot.val();
     if (!data) return;
 
-    if (typeof data.playbackRate === "number") {
+    // NEW speed from room
+    if (typeof data.playbackRate === 'number') {
       playbackRate = data.playbackRate;
       if (elements.playbackRate) {
         elements.playbackRate.value = String(playbackRate);
@@ -314,142 +267,115 @@ function joinRoom(roomId, asHost) {
       applyPlaybackRate();
     }
 
-    if (data.videoId && data.videoId !== videoId) {
-      videoId = data.videoId;
-      const parsed = parseVideoUrl(videoId);
-      loadVideoIntoPlayer(parsed, data.currentTime || 0);
+    if (data.videoId && (data.videoId.type !== videoId?.type || data.videoId.id !== videoId?.id)) {
+      createVideoPlayer(data.videoId.type, data.videoId.id, data.currentTime || 0);
     }
 
-    if (!isHost) {
-      if (typeof data.currentTime === "number") {
-        currentTime = data.currentTime;
-      }
-      if (typeof data.isPlaying === "boolean") {
-        isPlaying = data.isPlaying;
-      }
+    if (typeof data.isPlaying === 'boolean') {
+      isPlaying = data.isPlaying;
+      applyPlayPauseState();
+    }
 
-      if (ytPlayer && ytReady) {
-        const diff = Math.abs(ytPlayer.getCurrentTime() - currentTime);
-        if (diff > 1) {
-          ytPlayer.seekTo(currentTime, true);
-        }
-        if (isPlaying) ytPlayer.playVideo();
-        else ytPlayer.pauseVideo();
-      } else if (videoPlayer && videoPlayer.tagName === "VIDEO") {
-        const diff = Math.abs(videoPlayer.currentTime - currentTime);
-        if (diff > 1) {
-          videoPlayer.currentTime = currentTime;
-        }
-        if (isPlaying && videoPlayer.paused) videoPlayer.play();
-        if (!isPlaying && !videoPlayer.paused) videoPlayer.pause();
-      }
+    if (typeof data.currentTime === 'number') {
+      currentTime = data.currentTime;
+      applySeekState();
+    }
 
-      elements.currentTime.textContent = formatTime(currentTime);
+    if (typeof data.duration === 'number') {
+      elements.duration.textContent = formatTime(data.duration);
     }
   });
 }
 
-// UI events
+/* ---------- Host time sync ---------- */
+function startHostTimeSync() {
+  setInterval(() => {
+    if (!currentRoomId) return;
+    if (!isHost) return;
 
-elements.createRoom.addEventListener("click", () => {
-  const roomId = elements.roomId.value.trim();
-  if (!roomId) return;
-  joinRoom(roomId, true);
+    let t = 0;
+    if (ytPlayer && ytReady) {
+      t = ytPlayer.getCurrentTime() || 0;
+    } else if (videoPlayer && videoPlayer.tagName === 'VIDEO') {
+      t = videoPlayer.currentTime || 0;
+    } else {
+      return;
+    }
+
+    currentTime = t;
+    elements.currentTime.textContent = formatTime(currentTime);
+    updateRoomState({ currentTime });
+  }, 1000);
+}
+
+/* ---------- UI events ---------- */
+elements.createRoom.addEventListener('click', () => {
+  const roomId = elements.roomId.value.trim() || 'room_' + Math.random().toString(36).substr(2, 8);
+  currentRoomId = roomId;
+  isHost = true;
+  elements.roomId.value = roomId;
+  elements.roomStatus.textContent = `Room: ${roomId}`;
+  elements.roomControls.classList.remove('hidden');
+  elements.statusText.textContent = 'Room created. Load a video to start.';
+  syncVideo();
+  startHostTimeSync();
 });
 
-elements.joinRoom.addEventListener("click", () => {
+elements.joinRoom.addEventListener('click', () => {
   const roomId = elements.roomId.value.trim();
-  if (!roomId) return;
-  joinRoom(roomId, false);
+  if (!roomId) {
+    showError('Enter a room ID first');
+    return;
+  }
+  currentRoomId = roomId;
+  isHost = false;
+  elements.roomStatus.textContent = `Room: ${roomId}`;
+  elements.roomControls.classList.remove('hidden');
+  elements.statusText.textContent = 'Joined room. Waiting for host to load a video.';
+  syncVideo();
+  startHostTimeSync();
 });
 
-elements.loadVideo.addEventListener("click", () => {
+elements.loadVideo.addEventListener('click', () => {
   const url = elements.videoUrl.value.trim();
-  const parsed = parseVideoUrl(url);
-  if (!parsed) {
-    showError(
-      "Unsupported link. Use YouTube / Google Drive / Dropbox / direct .mp4 / .webm / .ogg"
-    );
+  if (!url) {
+    showError('Enter a video URL');
     return;
   }
 
-  videoId = url;
-  currentTime = 0;
+  const parsed = parseVideoUrl(url);
+  if (!parsed) {
+    showError('Unsupported URL. Use YouTube, Google Drive, Dropbox, or direct MP4/WebM');
+    return;
+  }
+
+  createVideoPlayer(parsed.type, parsed.id, 0);
   isPlaying = false;
-  loadVideoIntoPlayer(parsed, 0);
-
-  if (currentRoomId && isHost) {
-    updateRoomState({ videoId, currentTime: 0, isPlaying: false });
-  }
+  currentTime = 0;
+  elements.currentTime.textContent = '0:00';
+  elements.duration.textContent = '0:00';
+  elements.statusText.textContent = 'Video loaded. Press Play to start.';
+  updateRoomState({ videoId: parsed, currentTime, isPlaying });
 });
 
-elements.playPauseBtn.addEventListener("click", () => {
-  if (!currentRoomId) return;
-
-  if (ytPlayer && ytReady) {
-    if (isPlaying) {
-      ytPlayer.pauseVideo();
-      isPlaying = false;
-    } else {
-      ytPlayer.playVideo();
-      isPlaying = true;
-    }
-    currentTime = ytPlayer.getCurrentTime();
-    if (isHost) {
-      updateRoomState({ isPlaying, currentTime });
-    }
-  } else if (videoPlayer && videoPlayer.tagName === "VIDEO") {
-    if (videoPlayer.paused) {
-      videoPlayer.play();
-      isPlaying = true;
-    } else {
-      videoPlayer.pause();
-      isPlaying = false;
-    }
-    currentTime = videoPlayer.currentTime;
-    if (isHost) {
-      updateRoomState({ isPlaying, currentTime });
-    }
-  }
+elements.playPauseBtn.addEventListener('click', () => {
+  isPlaying = !isPlaying;
+  updateRoomState({ isPlaying });
 });
 
-elements.prevBtn.addEventListener("click", () => {
-  if (!currentRoomId) return;
-
+elements.prevBtn.addEventListener('click', () => {
   currentTime = Math.max(0, currentTime - 10);
-
-  if (ytPlayer && ytReady) {
-    ytPlayer.seekTo(currentTime, true);
-    if (!isPlaying) ytPlayer.pauseVideo();
-  } else if (videoPlayer && videoPlayer.tagName === "VIDEO") {
-    videoPlayer.currentTime = currentTime;
-  }
-
-  if (isHost) {
-    updateRoomState({ currentTime });
-  }
+  updateRoomState({ currentTime });
 });
 
-elements.nextBtn.addEventListener("click", () => {
-  if (!currentRoomId) return;
-
-  currentTime = currentTime + 10;
-
-  if (ytPlayer && ytReady) {
-    ytPlayer.seekTo(currentTime, true);
-    if (!isPlaying) ytPlayer.pauseVideo();
-  } else if (videoPlayer && videoPlayer.tagName === "VIDEO") {
-    videoPlayer.currentTime = currentTime;
-  }
-
-  if (isHost) {
-    updateRoomState({ currentTime });
-  }
+elements.nextBtn.addEventListener('click', () => {
+  currentTime += 10;
+  updateRoomState({ currentTime });
 });
 
-// NEW: speed dropdown listener
+// NEW: speed dropdown host control
 if (elements.playbackRate) {
-  elements.playbackRate.addEventListener("change", () => {
+  elements.playbackRate.addEventListener('change', () => {
     const val = parseFloat(elements.playbackRate.value);
     if (!isNaN(val) && val > 0) {
       playbackRate = val;
@@ -459,4 +385,10 @@ if (elements.playbackRate) {
       }
     }
   });
+}
+
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('room')) {
+  elements.roomId.value = urlParams.get('room');
+  elements.joinRoom.click();
 }
