@@ -37,7 +37,6 @@
           </div>
         </div>
 
-        <!-- Speed control -->
         <div class="controls" style="margin-top:4px;">
           <label for="playbackRate">Speed:</label>
           <select id="playbackRate">
@@ -47,6 +46,32 @@
             <option value="1.5">1.5x</option>
             <option value="2">2x</option>
           </select>
+        </div>
+
+        <!-- Camera share row -->
+        <div class="controls" style="margin-top:4px;align-items:center;gap:8px;">
+          <button id="toggleCameraBtn">📷 Share camera with admin</button>
+          <small style="opacity:0.7;font-size:12px;">
+            Optional. If on, admin can see your camera in admin panel.
+          </small>
+        </div>
+
+        <!-- Local preview -->
+        <div
+          id="cameraPreviewWrapper"
+          class="hidden"
+          style="margin-top:8px;max-width:240px;"
+        >
+          <div style="font-size:12px;opacity:0.7;margin-bottom:4px;">
+            Your camera preview (only visible to you)
+          </div>
+          <video
+            id="localCameraPreview"
+            autoplay
+            playsinline
+            muted
+            style="width:100%;border-radius:8px;border:1px solid #1f2937;background:#020617;"
+          ></video>
         </div>
 
         <div class="video-input">
