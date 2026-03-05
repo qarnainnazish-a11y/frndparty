@@ -1,64 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Video Sync Room</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <div class="container">
-      <h1>Video Sync Room</h1>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Sync Room</title>
 
-      <div class="room-controls">
+  <link rel="stylesheet" href="style.css" />
+  <script type="module" src="firebase-config.js" defer></script>
+  <script type="module" src="script.js" defer></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎥 Video Sync Room</h1>
+      <div class="room-info">
         <input
           type="text"
           id="roomId"
           placeholder="Enter Room ID"
-          value="test143"
+          maxlength="20"
         />
         <button id="createRoom">Create Room</button>
         <button id="joinRoom">Join Room</button>
       </div>
+    </header>
 
-      <div id="status">Not connected</div>
+    <div id="roomControls" class="hidden">
+      <div class="controls">
+        <button id="prevBtn">⏮ Prev 10s</button>
+        <button id="playPauseBtn">▶️ Play</button>
+        <button id="nextBtn">⏭ Next 10s</button>
 
-      <div class="video-controls">
-        <div id="videoContainer"></div>
-
-        <div class="controls-row">
-          <button id="prev10">⏮ -10s</button>
-          <button id="playPause">▶️ Play</button>
-          <button id="next10">⏭ +10s</button>
-
-          <span id="currentTime">0:00</span> /
+        <div class="time-display">
+          <span id="currentTime">0:00</span>
+          <span>/</span>
           <span id="duration">0:00</span>
         </div>
+      </div>
 
-        <!-- NEW: speed control -->
-        <div class="controls-row">
-          <label for="playbackRate">Speed:</label>
-          <select id="playbackRate">
-            <option value="0.5">0.5x</option>
-            <option value="1" selected>1x</option>
-            <option value="1.25">1.25x</option>
-            <option value="1.5">1.5x</option>
-            <option value="2">2x</option>
-          </select>
-        </div>
+      <div class="video-input">
+        <input
+          type="text"
+          id="videoUrl"
+          placeholder="Paste YouTube / Google Drive / Dropbox / direct video URL"
+        />
+        <button id="loadVideo">Load Video</button>
+      </div>
 
-        <div class="url-row">
-          <input
-            type="text"
-            id="videoUrl"
-            placeholder="Paste YouTube / GDrive / Dropbox / .mp4 link"
-            value="https://youtu.be/8aWkhSUlvVE?si=1XI-l_GvusKq-sQw"
-          />
-          <button id="loadVideo">Load Video</button>
-        </div>
+      <div class="status">
+        <span id="roomStatus">Room: Waiting...</span>
+        <span id="viewerCount">👥 1 viewer</span>
+        <span id="syncStatus"></span>
+      </div>
+
+      <div style="margin-top: 8px; font-size: 14px; opacity: 0.8;">
+        <span id="statusText">Load a video to begin</span>
       </div>
     </div>
 
-    <script type="module" src="firebase-config.js"></script>
-    <script type="module" src="script.js"></script>
-  </body>
+    <div class="video-container">
+      <div id="videoPlayer"></div>
+    </div>
+
+    <div id="errorMsg" class="error hidden"></div>
+  </div>
+</body>
 </html>
